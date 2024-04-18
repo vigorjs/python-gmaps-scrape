@@ -5,6 +5,7 @@ from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+import pandas as pd
 import time
 import csv
 import json
@@ -77,7 +78,7 @@ try:
 
     items = driver.find_elements(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction]')
     results = []
-    for item in items:
+    for i, item in enumerate(items):
         data = {}
 
         try:
@@ -95,10 +96,12 @@ try:
         except Exception:
             pass
 
-        try:
-            data['website'] = item.find_element(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction] div > a').get_attribute('href')
-        except Exception:
-            pass
+        if not (deepSearch) :    
+            try:
+                data['website'] = item.find_element(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction] div > a').get_attribute('href')
+            except Exception:
+                data['website'] = "tidak ada website"
+                pass
         
         try:
             rating_text = item.find_element(By.CSS_SELECTOR, '.fontBodyMedium > span[role="img"]').get_attribute('aria-label')
@@ -108,6 +111,8 @@ try:
                 data['ratings'] = rating_numbers[0]
                 data['reviews'] = int(rating_numbers[1]) if len(rating_numbers) > 1 else 0
         except Exception:
+            data['ratings'] = "tidak ada rating"
+            data['reviews'] = "tidak ada rating"
             pass
 
         try:
@@ -125,72 +130,96 @@ try:
         if (deepSearch):
             try:
                 item.click()
-                time.sleep(6)
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[jstcache="4"] > div div[role="main"] > div:nth-child(2)')))
                 item_detail = driver.find_element(By.CSS_SELECTOR, 'div[jstcache="4"] > div div[role="main"] > div:nth-child(2)')
-            except Exception:
+            except Exception as e:
+                print(f"Exception when clicking item and waiting for detail.")
                 pass
-            
+
             try:
+                WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div button div div .fontBodyMedium')))
                 data['alamat'] = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div button div div .fontBodyMedium').text
-            except Exception:
+            except Exception as e:
+                data['alamat'] = "tidak ada alamat"
+                print(f"Exception when getting address.")
                 pass
 
             try:
                 url_pattern = r'https?://(?:www\.)?[a-zA-Z0-9./]+'
 
                 if not (data.get('website')):
+                    WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'a')))
                     website = item_detail.find_element(By.CSS_SELECTOR, 'a').get_attribute('href')
 
                     if re.match(url_pattern, website):
                         data['website'] = website
-            except Exception:
+                    else :
+                        data['website'] = "tidak ada website"
+            except Exception as e:
+                data['website'] = "tidak ada website"
+                print(f"Exception when getting website.")
                 pass
 
             try:
-                if not data.get('nomor'):
+                if data.get('nomor') == None:
                     try:
+                        WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div:nth-child(5) button > div > div .fontBodyMedium')))
                         nomor_text = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div:nth-child(5) button > div > div .fontBodyMedium').text
                         if re.match(r".*\d$", nomor_text):  # Memeriksa apakah karakter terakhir adalah angka
                             data['nomor'] = nomor_text
                     except NoSuchElementException:
                         if website:
                             try:
+                                WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div:nth-child(6) button > div > div .fontBodyMedium')))
                                 nomor_text = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div:nth-child(6) button > div > div .fontBodyMedium').text
                                 if re.match(r".*\d$", nomor_text):  # Memeriksa apakah karakter terakhir adalah angka
                                     data['nomor'] = nomor_text
-                                break
-                            except Exception:
+                            except Exception as e:
+                                print(f"Exception when getting phone number.")
                                 pass
                         else:
                             try:
+                                WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div:nth-child(7) button > div > div .fontBodyMedium')))
                                 nomor_text = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div:nth-child(7) button > div > div .fontBodyMedium').text
                                 if re.match(r".*\d$", nomor_text):  # Memeriksa apakah karakter terakhir adalah angka
                                     data['nomor'] = nomor_text
                             except NoSuchElementException:
                                 try:
+                                    WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div:nth-child(4) button > div > div .fontBodyMedium')))
                                     nomor_text = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div:nth-child(4) button > div > div .fontBodyMedium').text
                                     if re.match(r".*\d$", nomor_text):  # Memeriksa apakah karakter terakhir adalah angka
                                         data['nomor'] = nomor_text
                                 except NoSuchElementException:
+                                    data['nomor'] = "tidak ada nomor"
                                     pass
-            except Exception:
+            except Exception as e:
+                print(f"Exception when getting phone number.")
                 pass
 
         if(data.get('nama')):
             results.append(data)
+            print(f"scrapped {i} data")
 
+        #export json
         with open('results.json', 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
 
+    #export csv
     csv_data_obj =  open('data.csv', 'w', encoding='utf-8')
     csv_writer = csv.writer(csv_data_obj)
-    header = ['nama','jenis_usaha','link','ratings','reviews','nomor', 'alamat', 'website']
+    header = ['nama','jenis_usaha','link','ratings','reviews','nomor', 'alamat', 'website'] if deepSearch else ['nama','jenis_usaha','link', 'website', 'ratings','reviews','nomor']
     csv_writer.writerow(header)
 
     for data in results:
         csv_writer.writerow(data.values())
 
     csv_data_obj.close()
+
+    #export excel
+    df = pd.DataFrame(results)
+    df.to_excel('data.xlsx', index=False)
+
 finally:
-    time.sleep(60)
+    time.sleep(30)
+    print(f"Data berhasil di Scrape")
     driver.quit()
