@@ -1,7 +1,12 @@
+import sys
+import os
+if getattr(sys, 'frozen', False):
+    Current_Path = os.path.dirname(sys.executable)
+else:
+    Current_Path = str(os.path.dirname(__file__))
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
@@ -120,7 +125,7 @@ try:
 
         try:
             text_content = item.text
-            phone_pattern = r'((\+?\d{1,2}[ -]?)?(\(?\d{3}\)?[ -]?\d{3,4}[ -]?\d{4}|\(?\d{2,3}\)?[ -]?\d{2,3}[ -]?\d{2,3}[ -]?\d{2,3}))'
+            phone_pattern = r'((\+?\d{1,2}[ -]?)?(\(?\d{3}\)?[ -]?\d{3,4}[ -]?\d{4,5}|\(?\d{2,3}\)?[ -]?\d{2,3}[ -]?\d{2,3}[ -]?\d{2,4}))'
             matches = re.findall(phone_pattern, text_content)
 
             phone_numbers = [match[0] for match in matches]
