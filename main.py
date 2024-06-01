@@ -14,9 +14,14 @@ from requests_html import HTMLSession
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
-import csv
+# import csv
 import json
 import re
+
+keyword = input("Masukkan Keyword : ")
+deepSearch = input('DeepScrape Nomor, Websites & Alamat? *jika ON estimasi -+ 100 data/15 menit | (y/n) : ').lower().strip() == 'y'
+if (deepSearch):
+    deepSearchEmail = input('DeepScrape Email? -+ 50 data/30 menit | (y/n) : ').lower().strip() == 'y'
 
 chrome_options = webdriver.ChromeOptions()
 
@@ -36,10 +41,6 @@ service = Service(
 
 # driver = webdriver.Chrome(service=service, options=chrome_options, seleniumwire_options=options)
 
-keyword = input("Masukkan Keyword : ")
-deepSearch = input('DeepScrape Nomor, Websites & Alamat? *jika ON estimasi -+ 100 data/15 menit | (y/n) : ').lower().strip() == 'y'
-if (deepSearch):
-    deepSearchEmail = input('DeepScrape Email? -+ 50 data/30 menit | (y/n) : ').lower().strip() == 'y'
 
 driver = webdriver.Chrome(service=service, options=chrome_options)
 try:
@@ -256,6 +257,6 @@ try:
     df.to_csv('data.csv', index=False)
 
 finally:
-    time.sleep(30)
     print(f"Data berhasil di Scrape")
+    time.sleep(30)
     driver.quit()
