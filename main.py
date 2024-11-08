@@ -1,59 +1,177 @@
 import sys
 import os
-if getattr(sys, 'frozen', False):
-    Current_Path = os.path.dirname(sys.executable)
-else:
-    Current_Path = str(os.path.dirname(__file__))
+import asyncio
+import aiohttp
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-from requests_html import HTMLSession
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
-# import csv
 import json
 import re
+from urllib.parse import urljoin, urlparse
 
-keyword = input("Masukkan Keyword : ")
-deepSearch = input('DeepScrape Nomor, Websites & Alamat? *jika ON estimasi -+ 100 data/15 menit | (y/n) : ').lower().strip() == 'y'
-if (deepSearch):
-    deepSearchEmail = input('DeepScrape Email? -+ 50 data/30 menit | (y/n) : ').lower().strip() == 'y'
+if getattr(sys, 'frozen', False):
+    Current_Path = os.path.dirname(sys.executable)
+else:
+    Current_Path = str(os.path.dirname(__file__))
 
-chrome_options = webdriver.ChromeOptions()
+async def scrape_emails(data):
+    async with aiohttp.ClientSession() as session:
+        try:
+            website = data.get('website')
+            if not website:
+                print(f"No website URL provided for {data['nama']}. Skipping email scraping.")
+                data['email'] = "tidak ada email"
+                return
+            
+            print(f"Scraping emails for {data['nama']} from {website}")
+            
+            async with session.get(website, timeout=10) as response:
+                if response.status != 200:
+                    print(f"Failed to fetch {website} with status {response.status}")
+                    data['email'] = "tidak ada email"
+                    return
+                
+                soup = BeautifulSoup(await response.text(), 'html.parser')
+                
+                # Kumpulkan semua tautan internal tanpa query parameters
+                internal_links = set()
+                for a_tag in soup.find_all('a', href=True):
+                    href = a_tag['href'].strip()
+                    # Periksa apakah URL relatif
+                    if href.startswith('/'):
+                        # Abaikan URL dengan query parameters
+                        if '?' not in href:
+                            full_url = urljoin(website, href)
+                            internal_links.add(full_url)
+                    elif href.startswith(website):
+                        if '?' not in href:
+                            internal_links.add(href)
+                # Batasi hingga 50 tautan internal
+                internal_links = list(internal_links)[:50]
+                
+                emails = set()
+                email_pattern = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
+                
+                # Ekstrak email dari halaman utama
+                # Dari tautan mailto
+                for a_tag in soup.find_all('a', href=True):
+                    href = a_tag['href'].strip()
+                    if href.lower().startswith('mailto:'):
+                        # Ekstrak email dari tautan mailto
+                        mailto_content = href[7:]  # Hapus 'mailto:'
+                        # Mailto bisa memiliki banyak email dipisahkan oleh koma atau titik koma
+                        extracted_emails = re.split(r'[;,]', mailto_content)
+                        for email in extracted_emails:
+                            email = email.strip()
+                            if email:
+                                # Validasi format email
+                                if email_pattern.fullmatch(email):
+                                    emails.add(email.lower())
+                
+                # Dari teks halaman utama
+                page_text = soup.get_text()
+                emails_in_text = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', page_text)
+                for email in emails_in_text:
+                    emails.add(email.lower())
+                
+                # Proses tautan internal
+                for page_url in internal_links:
+                    try:
+                        async with session.get(page_url, timeout=10) as page_response:
+                            if page_response.status != 200:
+                                print(f"Failed to fetch {page_url} with status {page_response.status}")
+                                continue
+                            
+                            page_soup = BeautifulSoup(await page_response.text(), 'html.parser')
+                            
+                            # Dari tautan mailto
+                            for a_tag in page_soup.find_all('a', href=True):
+                                href = a_tag['href'].strip()
+                                if href.lower().startswith('mailto:'):
+                                    mailto_content = href[7:]
+                                    extracted_emails = re.split(r'[;,]', mailto_content)
+                                    for email in extracted_emails:
+                                        email = email.strip()
+                                        if email:
+                                            if email_pattern.fullmatch(email):
+                                                emails.add(email.lower())
+                            
+                            # Dari teks halaman
+                            page_text = page_soup.get_text()
+                            emails_in_text = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', page_text)
+                            for email in emails_in_text:
+                                emails.add(email.lower())
+                    except Exception as e:
+                        print(f"Error fetching {page_url}: {e}")
+                        continue
+                
+                if emails:
+                    data['email'] = list(emails)
+                else:
+                    data['email'] = "tidak ada email"
+                
+                print(f"Emails scraped for {data['nama']}: {data['email']}")
+        except Exception as e:
+            print(f"Exception when scraping emails for {data['nama']}: {e}")
+            data['email'] = "tidak ada email"
 
-service = Service(
-  ChromeDriverManager().install()
-)
+def scrape_item_details(driver, item, data):
+    try:
+        print(f"scraping item details for {data['nama']}")
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable(item)).click()
+        time.sleep(5)
+        item_detail = driver.find_element(By.CSS_SELECTOR, 'div[jstcache="4"] > div div[role="main"] > div:nth-child(2)')
 
-# proxy='http://mixaliskitas_gmail_com-country-us-region-new_york-city-new_york_city:5pyqsmquyy@gate.nodemaven.com:8080'
+        print(f"scraping address for {data['nama']}")
+        WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div button div div .fontBodyMedium')))
+        data['alamat'] = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div button div div .fontBodyMedium').text
 
-# options = {
-#     'proxy': {
-#         'http': proxy,
-#         'https': proxy,
-#         'no_proxy': 'localhost,127.0.0.1'
-#     }
-# }
+        if data.get('website') is None:
+            WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'a')))
+            website = item_detail.find_element(By.CSS_SELECTOR, 'a').get_attribute('href')
+            url_pattern = r'^https?://(?:www\.)?[a-zA-Z0-9./]+$'
+            if re.match(url_pattern, website):
+                data['website'] = website
 
-# driver = webdriver.Chrome(service=service, options=chrome_options, seleniumwire_options=options)
+        if data.get('nomor') is None:
+            WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div:nth-child(5) button > div > div .fontBodyMedium')))
+            nomor_text = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div:nth-child(5) button > div > div .fontBodyMedium').text
+            phone_pattern = r'((\+?\d{1,2}[ -]?)?(\(?\d{3}\)?[ -]?\d{3,4}[ -]?\d{4,5}|\(?\d{2,3}\)?[ -]?\d{2,3}[ -]?\d{2,3}[ -]?\d{2,4}))'
+            matches = re.findall(phone_pattern, nomor_text)
+            phone_numbers = [match[0] for match in matches]
+            unique_phone_numbers = list(set(phone_numbers))
+            data['nomor'] = unique_phone_numbers[0] if unique_phone_numbers else None
+    except Exception as e:
+        print(f"Exception when scraping item details for {data['nama']}: {e}")
 
+async def main():
+    keyword = input("Masukkan Keyword : ")
+    deepSearch = input('DeepScrape Nomor, Websites & Alamat? *jika ON estimasi -+ 100 data/15 menit | (y/n) : ').lower().strip() == 'y'
+    deepSearchEmail = False
+    if deepSearch:
+        deepSearchEmail = input('DeepScrape Email? -+ 50 data/30 menit | (y/n) : ').lower().strip() == 'y'
 
-driver = webdriver.Chrome(service=service, options=chrome_options)
-try:
-
-    driver.get(f'https://www.google.com/maps/search/{keyword}')
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--start-maximized")
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
 
     try:
-        WebDriverWait(driver, 7).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "form:nth-child(2)"))).click()
-    except Exception:
-        pass
+        driver.get(f'https://www.google.com/maps/search/{keyword}')
 
-    scrollable_div = driver.find_element(By.CSS_SELECTOR, 'div[role="feed"]')
-    driver.execute_script("""
+        try:
+            WebDriverWait(driver, 7).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "form:nth-child(2)"))).click()
+        except Exception:
+            pass
+
+        scrollable_div = driver.find_element(By.CSS_SELECTOR, 'div[role="feed"]')
+        driver.execute_script("""
             var scrollableDiv = arguments[0];
             function scrollWithinElement(scrollableDiv) {
                 return new Promise((resolve, reject) => {
@@ -84,179 +202,78 @@ try:
                 });
             }
             return scrollWithinElement(scrollableDiv);
-    """, scrollable_div)
+        """, scrollable_div)
 
-    items = driver.find_elements(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction]')
-    results = []
-    for i, item in enumerate(items):
-        data = {}
+        items = driver.find_elements(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction]')
+        results = []
+        tasks = []
+        for i, item in enumerate(items):
+            data = {}
 
-        try:
-            data['nama'] = item.find_element(By.CSS_SELECTOR, '.fontHeadlineSmall').text
-        except Exception:
-            continue
-
-        try:
-            data['jenis_usaha'] = item.find_element(By.CSS_SELECTOR, 'div.fontBodyMedium:nth-child(2) > div:nth-child(4) > div:nth-child(1) > span:nth-child(1) > span').text
-        except Exception:
-            pass
-
-        try:
-            data['link'] = item.find_element(By.CSS_SELECTOR, "a").get_attribute('href')
-        except Exception:
-            pass
-
-        try:
-            data['website'] = item.find_element(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction] div > a').get_attribute('href')
-        except Exception:
-            data['website'] = None
-            pass
-        
-        try:
-            rating_text = item.find_element(By.CSS_SELECTOR, '.fontBodyMedium > span[role="img"]').get_attribute('aria-label')
-            rating_numbers = [float(piece.replace(",", ".")) for piece in rating_text.split(" ") if piece.replace(",", ".").replace(".", "", 1).isdigit()]
-
-            if rating_numbers:
-                data['ratings'] = rating_numbers[0]
-                data['reviews'] = int(rating_numbers[1]) if len(rating_numbers) > 1 else 0
-        except Exception:
-            data['ratings'] = "tidak ada rating"
-            data['reviews'] = "tidak ada rating"
-            pass
-
-        try:
-            text_content = item.text
-            phone_pattern = r'((\+?\d{1,2}[ -]?)?(\(?\d{3}\)?[ -]?\d{3,4}[ -]?\d{4,5}|\(?\d{2,3}\)?[ -]?\d{2,3}[ -]?\d{2,3}[ -]?\d{2,4}))'
-            matches = re.findall(phone_pattern, text_content)
-
-            phone_numbers = [match[0] for match in matches]
-            unique_phone_numbers = list(set(phone_numbers))
-
-            data['nomor'] = unique_phone_numbers[0] if unique_phone_numbers else None
-        except Exception:
-            pass
-
-        if (deepSearch):
             try:
-                print(f"scraping item........")
-                time.sleep(3)
-                WebDriverWait(driver, 10).until(EC.element_to_be_clickable(item)).click()
-                time.sleep(3)
-                item_detail = driver.find_element(By.CSS_SELECTOR, 'div[jstcache="4"] > div div[role="main"] > div:nth-child(2)')
-                print(f"item clicked {data['nama']}")
-            except Exception as e:
-                print(f"Exception when clicking item and waiting for detail. : {e} \n\n")
+                data['nama'] = item.find_element(By.CSS_SELECTOR, '.fontHeadlineSmall').text
+            except Exception:
+                continue
+
+            try:
+                data['jenis_usaha'] = item.find_element(By.CSS_SELECTOR, 'div.fontBodyMedium:nth-child(2) > div:nth-child(4) > div:nth-child(1) > span:nth-child(1) > span').text
+            except Exception:
                 pass
 
             try:
-                print(f"scraping address......")
-                WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div button div div .fontBodyMedium')))
-                data['alamat'] = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div button div div .fontBodyMedium').text
-                print(f"address scraped")
-            except Exception as e:
-                data['alamat'] = "tidak ada alamat"
-                print(f"Exception when getting address.")
+                data['link'] = item.find_element(By.CSS_SELECTOR, "a").get_attribute('href')
+            except Exception:
                 pass
 
             try:
-                if data.get('website') == None:
-                    WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'a')))
-                    website = item_detail.find_element(By.CSS_SELECTOR, 'a').get_attribute('href')
-
-                    url_pattern = r'https?://(?:www\.)?[a-zA-Z0-9./]+'
-                    if re.match(url_pattern, website):
-                        data['website'] = website
-            except Exception as e:
-                print(f"Exception when getting website : {e} \n\n")
-                pass
+                data['website'] = item.find_element(By.CSS_SELECTOR, 'div[role="feed"] > div > div[jsaction] div > a').get_attribute('href')
+            except Exception:
+                data['website'] = None
 
             try:
-                if data.get('nomor') == None:
-                    print(f"nomor 1")
-                    WebDriverWait(item_detail, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="region"] div:nth-child(5) button > div > div .fontBodyMedium')))
-                    print(f"nomor 2")
-                    nomor_text = item_detail.find_element(By.CSS_SELECTOR, 'div[role="region"] div:nth-child(5) button > div > div .fontBodyMedium')
-                    print(f"nomor 3")
-                    text_content = nomor_text.text
-                    
-                    phone_pattern = r'((\+?\d{1,2}[ -]?)?(\(?\d{3}\)?[ -]?\d{3,4}[ -]?\d{4}|\(?\d{2,3}\)?[ -]?\d{2,3}[ -]?\d{2,3}[ -]?\d{2,3}))'
-                    print(f"nomor 4")
-                    matches = re.findall(phone_pattern, text_content)
+                rating_text = item.find_element(By.CSS_SELECTOR, '.fontBodyMedium > span[role="img"]').get_attribute('aria-label')
+                rating_numbers = [float(piece.replace(",", ".")) for piece in rating_text.split(" ") if piece.replace(",", ".").replace(".", "", 1).isdigit()]
 
-                    print(f"nomor 5")
-                    phone_numbers = [match[0] for match in matches]
-                    print(f"nomor 6")
-                    unique_phone_numbers = list(set(phone_numbers))
+                if rating_numbers:
+                    data['ratings'] = rating_numbers[0]
+                    data['reviews'] = int(rating_numbers[1]) if len(rating_numbers) > 1 else 0
+            except Exception:
+                data['ratings'] = "tidak ada rating"
+                data['reviews'] = "tidak ada rating"
 
-                    print(f"nomor 7")
-                    data['nomor'] = unique_phone_numbers[0] if unique_phone_numbers else None
-                    
-            except Exception as e:
-                print(f"Exception when getting phone number\n\n")
+            try:
+                text_content = item.text
+                phone_pattern = r'((\+?\d{1,2}[ -]?)?(\(?\d{3}\)?[ -]?\d{3,4}[ -]?\d{4,5}|\(?\d{2,3}\)?[ -]?\d{2,3}[ -]?\d{2,3}[ -]?\d{2,4}))'
+                matches = re.findall(phone_pattern, text_content)
+                phone_numbers = [match[0] for match in matches]
+                unique_phone_numbers = list(set(phone_numbers))
+                data['nomor'] = unique_phone_numbers[0] if unique_phone_numbers else None
+            except Exception:
                 pass
 
-            if (deepSearchEmail):
-                session = HTMLSession()
-                matches = []
-                try:
-                    response = session.get(data.get('website'))
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    data_url = str(soup.find_all('a'))
+            if deepSearch:
+                scrape_item_details(driver, item, data)
 
-                    for match in re.finditer('href="/', data_url):
-                        find = data_url[match.start() + 6:match.end() + 30]
-                        find = find[:find.find('"')].strip()
-                        
-                        if find != "/":
-                            final_url = f'{data["website"]}{find}'
-                            matches.append(final_url)
-                            if len(matches) >= 50:
-                                break
-                    
-                    emails = []
+            if deepSearchEmail:
+                tasks.append(asyncio.create_task(scrape_emails(data)))
 
-                    for pages in matches:
-                        try:
-                            response = session.get(pages)
-                            soup = BeautifulSoup(response.content, 'html.parser')
-                            print(f'Scraping Email from {pages}..... \n')
+            results.append(data)
+            print(f"scraped {i} data \n ' '")
 
-                            for lnk in soup.find_all('a'):
-                                if 'mailto:' in lnk.get('href'):
-                                    emails.append(lnk.get('href').split(':')[1])
-                            print(f"emails : {emails} \n")
+        if deepSearchEmail:
+            await asyncio.gather(*tasks)
 
-                            email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
-                            emails.extend(re.findall(email_pattern, soup.get_text()))
-                            print(f"emails after regex : {emails} \n")
-
-                        except Exception as e:
-                            print(f'Exception when getting email : {e} \n')
-                            data['email'] = None
-                            continue
-
-                    unique_emails = list(set(emails))
-                    print(unique_emails)
-                    data['email'] = unique_emails if unique_emails else "tidak ada email"
-                    print(f'Email scraped \n')
-                except Exception as e:
-                    print(f'Exception when visitting website : {e} \n')
-                    data['email'] = None
-                    pass
-
-        results.append(data)
-        print(f"scrapped {i} data \n ' '")
-
-        #export json
         with open('results.json', 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
 
-    #export excel and csv
-    df = pd.DataFrame(results)
-    df.to_excel('data.xlsx', index=False)
-    df.to_csv('data.csv', index=False)
+        df = pd.DataFrame(results)
+        df.to_excel('data.xlsx', index=False)
+        df.to_csv('data.csv', index=False)
 
-finally:
-    print(f"Data berhasil di Scrape")
-    time.sleep(30)
-    driver.quit()
+    finally:
+        print(f"Data scraping complete")
+        time.sleep(30)
+        driver.quit()
+
+if __name__ == "__main__":
+    asyncio.run(main())
